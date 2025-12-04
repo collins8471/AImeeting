@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vibe 語音筆記本 v1.9.0 (音訊路由版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #f8fafc;
+            color: #334155;
+        }
+        
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        .mic-active { animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite; }
+        @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        .shimmer {
+            background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+        }
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        @keyframes slide-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .msg-card { animation: slide-in 0.3s ease-out forwards; }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+        }
+
+        .toggle-checkbox:checked { right: 0; border-color: #10b981; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #10b981; }
+        
+        .debug-line { font-family: monospace; border-bottom: 1px solid #334155; padding: 2px 0; word-break: break-all; }
+        .log-raw { color: #94a3b8; }
+        .log-final { color: #34d399; font-weight: bold; }
+        .log-ai { color: #60a5fa; }
+        .log-error { color: #f87171; }
+        .log-sys { color: #fbbf24; }
+
+        .mode-select {
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23007CB2%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+            background-repeat: no-repeat;
+            background-position: right 0.7rem top 50%;
+            background-size: 0.65rem auto;
+        }
+        
+        .prose h1 { font-size: 1.5em; font-weight: bold; margin-bottom: 0.5em; color: #1e293b; }
+        .prose h2 { font-size: 1.25em; font-weight: bold; margin-top: 1em; margin-bottom: 0.5em; color: #334155; }
+        .prose ul { list-style-type: disc; padding-left: 1.5em; margin-bottom: 1em; }
+        .prose li { margin-bottom: 0.25em; }
+        .prose strong { color: #0f172a; font-weight: 600; }
+
+        #audio-visualizer {
+            width: 100px;
+            height: 30px;
+            border-radius: 4px;
+            background-color: #f1f5f9;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden bg-slate-50">
+
+    <!-- Toast -->
+    <div id="toast-container" class="fixed top-4 left-0 right-0 z-[90] flex justify-center pointer-events-none">
+        <div id="toast" class="transform -translate-y-full opacity-0 transition-all duration-300 bg-white border border-red-100 text-red-600 px-6 py-3 rounded-full shadow-lg flex items-center gap-3 pointer-events-auto">
+            <i id="toast-icon" class="fa-solid fa-circle-exclamation"></i>
+            <span id="toast-msg" class="font-medium text-sm"></span>
+        </div>
+    </div>
+
+    <!-- Debug Console -->
+    <div id="debug-panel" class="fixed bottom-0 left-0 right-0 h-48 bg-slate-900/95 text-xs p-4 overflow-y-auto z-[80] hidden border-t border-slate-700 shadow-2xl transition-transform duration-300">
+        <div class="flex justify-between items-center mb-2 sticky top-0 bg-slate-900/95 pb-2 border-b border-slate-700">
+            <span class="font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-terminal text-green-400"></i> SYSTEM LOG
+            </span>
+            <div class="flex gap-2">
+                <button onclick="copyDebugLog()" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded text-xs transition-colors flex items-center gap-1">
+                    <i class="fa-regular fa-copy"></i> Copy Log
+                </button>
+                <button onclick="clearDebugLog()" class="text-slate-400 hover:text-white px-2">Clear</button>
+                <button onclick="toggleDebugPanel()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+        </div>
+        <div id="debug-content" class="space-y-1 font-mono select-text cursor-text"></div>
+    </div>
+
+    <!-- Summary Modal -->
+    <div id="summary-modal" class="fixed inset-0 z-[70] bg-black/40 backdrop-blur-sm hidden flex items-center justify-center opacity-0 transition-opacity duration-300">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl h-[85vh] flex flex-col scale-95 transition-transform duration-300 overflow-hidden">
+            <div class="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center">
+                        <i class="fa-solid fa-wand-magic-sparkles text-xl"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-bold text-slate-800">AI 總結工坊</h3>
+                        <p class="text-xs text-slate-500">選擇提示詞模板或自定義指令</p>
+                    </div>
+                </div>
+                <button onclick="toggleSummaryModal()" class="w-8 h-8 rounded-full hover:bg-slate-200 flex items-center justify-center text-slate-500 transition-colors">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+            <div class="flex-1 flex flex-col md:flex-row overflow-hidden">
+                <div class="w-full md:w-1/3 border-r border-slate-100 bg-slate-50 flex flex-col">
+                    <div class="p-3 border-b border-slate-100 flex justify-between items-center">
+                        <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">Templates</span>
+                        <button onclick="addNewPrompt()" class="text-indigo-600 hover:text-indigo-800 text-xs font-bold px-2 py-1 rounded hover:bg-indigo-50 transition-colors">
+                            <i class="fa-solid fa-plus mr-1"></i>新增
+                        </button>
+                    </div>
+                    <div id="prompt-list" class="flex-1 overflow-y-auto p-2 space-y-1"></div>
+                </div>
+                <div class="flex-1 flex flex-col bg-white h-full overflow-hidden">
+                    <div class="p-4 border-b border-slate-100">
+                        <div class="mb-2 flex justify-between items-center">
+                            <input type="text" id="prompt-title" class="text-sm font-bold text-slate-800 w-2/3 border-none focus:ring-0 p-0" placeholder="提示詞名稱...">
+                            <div class="flex gap-2">
+                                <button onclick="saveCurrentPrompt()" class="text-xs text-emerald-600 hover:bg-emerald-50 px-2 py-1 rounded transition-colors" title="儲存變更"><i class="fa-solid fa-save"></i> 儲存</button>
+                                <button onclick="deleteCurrentPrompt()" class="text-xs text-red-400 hover:bg-red-50 px-2 py-1 rounded transition-colors" title="刪除"><i class="fa-solid fa-trash"></i></button>
+                            </div>
+                        </div>
+                        <textarea id="prompt-content" class="w-full h-24 text-sm text-slate-600 border border-slate-200 rounded-lg p-3 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none" placeholder="輸入給 AI 的指令..."></textarea>
+                        <div class="mt-3 flex justify-end">
+                            <button onclick="generateSummary()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md shadow-indigo-200 transition-all flex items-center gap-2">
+                                <i class="fa-solid fa-play"></i> 開始生成總結
+                            </button>
+                        </div>
+                    </div>
+                    <div class="flex-1 overflow-y-auto p-6 bg-slate-50/30 relative">
+                        <div id="summary-loading" class="hidden absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-10">
+                            <div class="w-10 h-10 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-3"></div>
+                            <p class="text-sm text-indigo-600 font-bold animate-pulse">AI 正在閱讀您的筆記...</p>
+                        </div>
+                        <div id="summary-result" class="prose prose-sm max-w-none text-slate-700">
+                            <div class="text-center text-slate-400 mt-10">
+                                <i class="fa-regular fa-file-lines text-4xl mb-3 opacity-30"></i>
+                                <p>選擇左側模板並點擊生成，<br>AI 將為您整理本次紀錄的重點。</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="summary-actions" class="p-3 border-t border-slate-100 bg-white flex justify-end hidden">
+                        <button onclick="copySummary()" class="text-slate-500 hover:text-indigo-600 px-3 py-1.5 rounded text-sm transition-colors flex items-center gap-2">
+                            <i class="fa-regular fa-copy"></i> 複製結果
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audio Help Modal -->
+    <div id="audio-help-modal" class="fixed inset-0 z-[70] bg-black/40 backdrop-blur-sm hidden flex items-center justify-center opacity-0 transition-opacity duration-300">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 scale-95 transition-transform duration-300">
+            <h3 class="text-xl font-bold text-slate-800 mb-4"><i class="fa-solid fa-headphones text-indigo-500 mr-2"></i>擷取系統聲音</h3>
+            <div class="space-y-4 text-sm text-slate-600 leading-relaxed">
+                <p>瀏覽器預設只能聽見「麥克風」的聲音。若要錄製線上會議或影片，請依照系統設定：</p>
+                <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                    <h4 class="font-bold text-slate-800 mb-1">🪟 Windows 使用者</h4>
+                    <ol class="list-decimal pl-4 space-y-1">
+                        <li>右鍵點擊音量圖示 >「聲音設定」。</li>
+                        <li>確保 <strong>Stereo Mix (立體聲混音)</strong> 已啟用。</li>
+                        <li class="text-indigo-600 font-bold">關鍵步驟：請在 Chrome 網址列輸入 <code>chrome://settings/content/microphone</code></li>
+                        <li>將預設麥克風改為 <strong>Stereo Mix</strong>。</li>
+                    </ol>
+                </div>
+                <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                    <h4 class="font-bold text-slate-800 mb-1">🍎 Mac 使用者</h4>
+                    <p>Mac 原生不支援內錄。建議安裝免費的 <strong>VB-Cable</strong> 或 <strong>BlackHole</strong>。</p>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end">
+                <button onclick="toggleAudioHelp()" class="px-5 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-bold transition-all">知道了</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Clear Modal -->
+    <div id="clear-modal" class="fixed inset-0 z-[70] bg-black/40 backdrop-blur-sm hidden flex items-center justify-center opacity-0 transition-opacity duration-300">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 scale-95 transition-transform duration-300">
+            <div class="text-center mb-6">
+                <div class="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500">
+                    <i class="fa-regular fa-trash-can text-xl"></i>
+                </div>
+                <h3 class="text-lg font-bold text-slate-800 mb-2">確定要清空嗎？</h3>
+                <p class="text-sm text-slate-500">畫面上的所有筆記將會被移除且無法復原。</p>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="toggleClearModal()" class="flex-1 px-4 py-2.5 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 font-medium transition-colors">取消</button>
+                <button onclick="performClear()" class="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-xl hover:bg-red-600 font-medium transition-colors shadow-md shadow-red-200">確認清空</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm hidden flex items-center justify-center opacity-0 transition-opacity duration-300">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 scale-95 transition-transform duration-300">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-xl font-bold text-slate-800">API 設定</h3>
+                <button onclick="toggleSettings()" class="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-500"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">Google Gemini API Key</label>
+                    <input type="password" id="api-key-input" class="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all text-slate-700" placeholder="AI Studio Key (以 AIza 開頭)">
+                </div>
+
+                <!-- Audio Input Select (New) -->
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">🎙️ 音訊輸入裝置 (Audio Input)</label>
+                    <select id="audio-source-select" class="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all text-slate-700 text-sm bg-white">
+                        <option value="default">預設裝置 (Default)</option>
+                    </select>
+                    <p class="text-xs text-slate-500 mt-1">
+                        <i class="fa-solid fa-circle-info mr-1"></i>
+                        切換後請觀察上方波形圖。若要辨識系統聲音，請選 Stereo Mix。
+                    </p>
+                </div>
+                
+                <div class="bg-indigo-50 p-4 rounded-xl flex items-start gap-3">
+                    <i class="fa-solid fa-users-viewfinder text-indigo-600 mt-1"></i>
+                    <div>
+                        <h4 class="text-sm font-bold text-indigo-800 mb-1">雙模式引擎 V1.9</h4>
+                        <p class="text-xs text-indigo-700 leading-relaxed">新增音訊路由控制，支援系統內錄波形監測。</p>
+                    </div>
+                </div>
+
+                <!-- AI Translate Toggle -->
+                <div class="flex items-center justify-between border-t border-slate-100 pt-4 mt-4">
+                    <div class="flex items-center gap-2">
+                        <i class="fa-solid fa-language text-slate-400"></i>
+                        <span class="text-sm font-bold text-slate-700">AI 翻譯 (同步控制)</span>
+                    </div>
+                    <div class="relative inline-block w-10 align-middle select-none">
+                        <input type="checkbox" id="ai-toggle-settings" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer border-slate-300 transition-all duration-300 right-5"/>
+                        <label for="ai-toggle-settings" class="toggle-label block overflow-hidden h-5 rounded-full bg-slate-300 cursor-pointer transition-colors duration-300"></label>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between border-t border-slate-100 pt-4 mt-4">
+                    <div class="flex items-center gap-2">
+                        <i class="fa-solid fa-bug text-slate-400"></i>
+                        <span class="text-sm font-bold text-slate-700">Debug 模式</span>
+                    </div>
+                    <div class="relative inline-block w-10 align-middle select-none">
+                        <input type="checkbox" id="debug-toggle" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer border-slate-300 transition-all duration-300 right-5"/>
+                        <label for="debug-toggle" class="toggle-label block overflow-hidden h-5 rounded-full bg-slate-300 cursor-pointer transition-colors duration-300"></label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-8 flex justify-end">
+                <button onclick="saveSettings()" class="px-6 py-2.5 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 font-bold transition-all shadow-md hover:shadow-lg active:scale-95">確認儲存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="glass-panel z-10 w-full px-4 md:px-8 py-3 flex items-center justify-between shrink-0 h-16 md:h-20 gap-4">
+        <div class="flex items-center gap-3 shrink-0">
+            <div class="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center text-white shadow-emerald-200 shadow-lg transition-colors" id="app-logo">
+                <i class="fa-solid fa-microphone-lines text-lg"></i>
+            </div>
+            <div class="hidden md:block">
+                <h1 class="text-lg font-bold text-slate-800">Vibe Voice</h1>
+                <div class="relative">
+                    <select id="mode-select" onchange="changeMode(this.value)" class="mode-select appearance-none bg-transparent text-[10px] md:text-xs font-bold text-emerald-600 tracking-wider uppercase pr-6 cursor-pointer focus:outline-none">
+                        <option value="lecture">Lecture Mode (上課)</option>
+                        <option value="meeting">Meeting Mode (會議)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Visualizer Area -->
+        <div class="flex-1 flex justify-center items-center h-full px-2">
+            <canvas id="audio-visualizer" class="hidden md:block w-32 h-8"></canvas>
+        </div>
+
+        <!-- Tools -->
+        <div class="flex items-center gap-2 md:gap-3 shrink-0">
+            <div class="flex items-center gap-2 mr-2 hidden lg:flex">
+                <span class="text-xs font-bold text-slate-500">AI 翻譯</span>
+                <div class="relative inline-block w-10 align-middle select-none">
+                    <input type="checkbox" id="ai-toggle" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer border-slate-300 transition-all duration-300 right-5"/>
+                    <label for="ai-toggle" class="toggle-label block overflow-hidden h-5 rounded-full bg-slate-300 cursor-pointer transition-colors duration-300"></label>
+                </div>
+            </div>
+            
+            <button onclick="toggleAudioHelp()" class="w-9 h-9 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all flex items-center justify-center" title="系統聲音設定">
+                <i class="fa-solid fa-headphones"></i>
+            </button>
+
+            <button onclick="toggleSummaryModal()" class="w-9 h-9 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-600 hover:bg-indigo-100 transition-all flex items-center justify-center shadow-sm" title="AI 總結">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+            </button>
+            
+            <button onclick="toggleSettings()" class="w-9 h-9 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-emerald-600 hover:border-emerald-300 transition-all flex items-center justify-center shadow-sm" title="設定">
+                <i class="fa-solid fa-gear"></i>
+            </button>
+            
+            <button onclick="clearAll()" class="w-9 h-9 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-red-500 hover:border-red-300 transition-all flex items-center justify-center shadow-sm" title="清空">
+                <i class="fa-regular fa-trash-can"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Language Bar -->
+    <div class="w-full bg-slate-50 border-b border-slate-200 p-2 flex justify-center gap-4">
+        <button id="lang-en" onclick="setLanguage('en-US')" class="px-4 py-1 rounded-full text-xs font-bold transition-all bg-white text-emerald-700 shadow-sm border border-slate-200">EN 英文輸入</button>
+        <button id="lang-zh" onclick="setLanguage('zh-TW')" class="px-4 py-1 rounded-full text-xs font-bold transition-all text-slate-500 hover:text-slate-700 border border-transparent">ZH 中文輸入</button>
+    </div>
+
+    <!-- Main -->
+    <main class="flex-1 w-full max-w-4xl mx-auto p-4 flex flex-col relative overflow-hidden pb-56">
+        <div id="welcome-screen" class="absolute inset-0 flex flex-col items-center justify-center text-slate-300 z-0 pointer-events-none">
+            <i class="fa-solid fa-chalkboard-user text-6xl mb-4 opacity-50 transition-opacity" id="welcome-icon"></i>
+            <p class="text-lg font-medium" id="welcome-text">準備好上課了嗎？</p>
+            <p class="text-sm opacity-70">點擊下方按鈕，即時捕捉每一句重點</p>
+        </div>
+        <div id="message-container" class="flex-1 overflow-y-auto no-scrollbar space-y-4 pb-32 px-2 z-10 scroll-smooth"></div>
+        <div id="interim-bar" class="absolute bottom-24 left-4 right-4 bg-slate-900/80 backdrop-blur-md text-white p-4 rounded-2xl shadow-xl transform transition-all duration-300 opacity-0 translate-y-4 z-20">
+            <div class="flex justify-between items-end mb-1">
+                <p id="interim-text" class="text-lg md:text-xl font-light leading-relaxed flex-1 mr-4">...</p>
+                <div class="text-[10px] text-slate-400 font-mono tracking-wider uppercase shrink-0" id="mic-status">Waiting...</div>
+            </div>
+        </div>
+        <div id="mic-container" class="absolute bottom-6 left-0 right-0 flex justify-center z-30 transition-all duration-300 ease-out">
+            <button id="mic-btn" onclick="toggleRecognition()" class="group relative w-16 h-16 md:w-20 md:h-20 bg-slate-800 rounded-full text-white shadow-2xl shadow-slate-400/50 flex items-center justify-center transition-all hover:scale-105 hover:bg-slate-700 active:scale-95">
+                <i class="fa-solid fa-microphone text-2xl md:text-3xl transition-transform group-hover:scale-110"></i>
+                <span class="absolute top-0 right-0 w-4 h-4 bg-red-500 rounded-full border-2 border-white hidden" id="recording-dot"></span>
+            </button>
+        </div>
+    </main>
+
+    <audio id="sfx-start" src="https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3"></audio>
+    <audio id="sfx-end" src="https://assets.mixkit.co/active_storage/sfx/2572/2572-preview.mp3"></audio>
+
+    <script>
+        // --- Variables ---
+        let recognition;
+        let isListening = false;
+        let currentLang = 'en-US'; 
+        let apiKey = localStorage.getItem('vibe_gemini_api_key') || '';
+        let isAIEnabled = false;
+        let isDebugMode = false;
+        let ignoreEnd = false;
+        let messageHistory = JSON.parse(localStorage.getItem('vibe_history') || '[]');
+        let lastFinalText = '';
+        let currentMode = 'lecture';
+        let selectedDeviceId = localStorage.getItem('vibe_audio_device') || 'default';
+        
+        // --- DOM Elements (Declared Global) ---
+        let msgContainer;
+        let interimBar;
+        let interimText;
+        let micStatus;
+        let micBtn;
+        let micContainer;
+        let recDot;
+        let welcomeScreen;
+        let apiKeyInput;
+        let settingsModal;
+        let clearModal;
+        let summaryModal;
+        let audioHelpModal;
+        let aiToggle;
+        let aiToggleSettings;
+        let debugToggle;
+        let debugPanel;
+        let debugContent;
+        let modeSelect;
+        let appLogo;
+        let welcomeIcon;
+        let welcomeText;
+        let canvas;
+        let canvasCtx;
+        let audioSelect;
+
+        // --- Other Globals ---
+        let lastResultTime = Date.now();
+        let pendingInterim = '';
+        let lastInterimLength = 0;
+        const SILENCE_TIMEOUT = 15000; 
+        let silenceInterval = null;
+        let audioContext, analyser, microphone, stream;
+        
+        // --- Prompts ---
+        let customPrompts = JSON.parse(localStorage.getItem('vibe_prompts') || '[]');
+        const defaultPrompts = [
+            { id: 'p1', title: '📝 會議紀要', content: `請根據以下內容生成一份專業的會議紀要。\n格式要求：\n1. **會議主題**\n2. **關鍵決策**\n3. **待辦事項 (Action Items)**\n4. **詳細摘要**` },
+            { id: 'p2', title: '🎓 課堂重點', content: `請將這段上課內容整理成學習筆記。\n格式要求：\n1. **核心概念**\n2. **名詞解釋**\n3. **詳細筆記**` },
+            { id: 'p3', title: '✅ 待辦清單', content: `請忽略閒聊，只幫我提取出所有需要執行的任務。\n格式：\n- [ ] 任務內容 (負責人)` }
+        ];
+        let allPrompts = [...defaultPrompts, ...customPrompts];
+        let currentPromptId = null;
+
+        // --- INITIALIZATION ON LOAD ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // 1. Assign DOM Elements
+            msgContainer = document.getElementById('message-container');
+            interimBar = document.getElementById('interim-bar');
+            interimText = document.getElementById('interim-text');
+            micStatus = document.getElementById('mic-status');
+            micBtn = document.getElementById('mic-btn');
+            micContainer = document.getElementById('mic-container');
+            recDot = document.getElementById('recording-dot');
+            welcomeScreen = document.getElementById('welcome-screen');
+            apiKeyInput = document.getElementById('api-key-input');
+            settingsModal = document.getElementById('settings-modal');
+            clearModal = document.getElementById('clear-modal');
+            summaryModal = document.getElementById('summary-modal');
+            audioHelpModal = document.getElementById('audio-help-modal');
+            aiToggle = document.getElementById('ai-toggle');
+            aiToggleSettings = document.getElementById('ai-toggle-settings');
+            debugToggle = document.getElementById('debug-toggle');
+            debugPanel = document.getElementById('debug-panel');
+            debugContent = document.getElementById('debug-content');
+            modeSelect = document.getElementById('mode-select');
+            appLogo = document.getElementById('app-logo');
+            welcomeIcon = document.getElementById('welcome-icon');
+            welcomeText = document.getElementById('welcome-text');
+            canvas = document.getElementById('audio-visualizer');
+            canvasCtx = canvas ? canvas.getContext('2d') : null;
+            audioSelect = document.getElementById('audio-source-select');
+
+            // 2. Restore Settings
+            if(apiKeyInput) apiKeyInput.value = apiKey;
+            
+            // 3. Attach Listeners
+            if(aiToggle) aiToggle.addEventListener('change', (e) => toggleAI(e.target.checked));
+            if(aiToggleSettings) aiToggleSettings.addEventListener('change', (e) => toggleAI(e.target.checked));
+            if(debugToggle) {
+                debugToggle.addEventListener('change', (e) => {
+                    isDebugMode = e.target.checked;
+                    updateDebugUI();
+                });
+            }
+            
+            if(audioSelect) {
+                // Load Audio Devices
+                getAudioInputs();
+                audioSelect.addEventListener('change', (e) => {
+                    selectedDeviceId = e.target.value;
+                    localStorage.setItem('vibe_audio_device', selectedDeviceId);
+                    if(isListening) {
+                        // Restart visualizer with new device
+                        startVisualizer(selectedDeviceId);
+                    }
+                });
+            }
+
+            // 4. Restore History
+            if (messageHistory.length > 0) {
+                if(welcomeScreen) welcomeScreen.style.display = 'none';
+                messageHistory.forEach(msg => renderMessageCard(msg));
+                setTimeout(scrollToBottom, 100);
+            }
+
+            // 5. Init Core
+            initRecognition();
+        });
+
+        // --- Audio Input Logic ---
+        async function getAudioInputs() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+                console.log("enumerateDevices() not supported.");
+                return;
+            }
+
+            try {
+                // Need to ask permission first to see device labels
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioInputs = devices.filter(device => device.kind === 'audioinput');
+                
+                if (audioSelect) {
+                    audioSelect.innerHTML = '<option value="default">預設裝置 (Default)</option>';
+                    audioInputs.forEach(device => {
+                        const option = document.createElement('option');
+                        option.value = device.deviceId;
+                        option.text = device.label || `Microphone ${audioSelect.length + 1}`;
+                        audioSelect.appendChild(option);
+                    });
+                    audioSelect.value = selectedDeviceId;
+                }
+            } catch (err) {
+                console.error("Error getting audio devices: " + err);
+            }
+        }
+
+        // --- Helper Functions ---
+
+        function showToast(msg, type) {
+            const t = document.getElementById('toast');
+            const txt = document.getElementById('toast-msg');
+            const icon = document.getElementById('toast-icon');
+            if(!t || !txt || !icon) return;
+            
+            txt.innerText = msg;
+            icon.className = type === 'error' ? "fa-solid fa-circle-exclamation" : "fa-solid fa-check";
+            t.className = `fixed top-4 left-0 right-0 z-[90] flex justify-center pointer-events-auto transform translate-y-0 opacity-100 transition-all duration-300`;
+            t.firstElementChild.className = type === 'error' ? "bg-red-50 border border-red-200 text-red-600 px-6 py-3 rounded-full shadow-lg flex items-center gap-3" : "bg-emerald-50 border border-emerald-200 text-emerald-600 px-6 py-3 rounded-full shadow-lg flex items-center gap-3";
+            setTimeout(() => { t.classList.remove('translate-y-0', 'opacity-100'); t.classList.add('-translate-y-full', 'opacity-0'); }, 2000);
+        }
+
+        function toggleModal(id) {
+            const modal = document.getElementById(id);
+            if(!modal) return;
+            if (modal.classList.contains('hidden')) {
+                modal.classList.remove('hidden');
+                setTimeout(() => { modal.classList.remove('opacity-0'); modal.querySelector('div').classList.remove('scale-95'); }, 10);
+            } else {
+                modal.classList.add('opacity-0'); modal.querySelector('div').classList.add('scale-95');
+                setTimeout(() => modal.classList.add('hidden'), 300);
+            }
+        }
+
+        function toggleSettings() { toggleModal('settings-modal'); }
+        function toggleClearModal() { toggleModal('clear-modal'); }
+        function toggleAudioHelp() { toggleModal('audio-help-modal'); }
+        function toggleSummaryModal() { toggleModal('summary-modal'); renderPromptList(); if (allPrompts.length > 0 && !currentPromptId) selectPrompt(allPrompts[0].id); }
+
+        function saveToLocalStorage() { localStorage.setItem('vibe_history', JSON.stringify(messageHistory)); }
+
+        function copyTextToClipboard(text) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.left = "-9999px";
+            textArea.style.top = "0";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                const successful = document.execCommand('copy');
+                if(successful) showToast("已複製", "success");
+                else showToast("複製失敗", "error");
+            } catch (err) {
+                console.error('Copy failed', err); showToast("複製失敗", "error");
+            }
+            document.body.removeChild(textArea);
+        }
+
+        function logDebug(msg, type = "raw") {
+            if (!isDebugMode) return;
+            if(!debugContent) return;
+            const time = new Date().toLocaleTimeString('en-US', {hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit'});
+            const div = document.createElement('div');
+            div.className = `debug-line log-${type}`;
+            div.innerHTML = `<span class="opacity-50 mr-2">[${time}]</span>${msg}`;
+            debugContent.insertBefore(div, debugContent.firstChild);
+            if(debugContent.children.length > 50) debugContent.lastChild.remove();
+        }
+
+        function clearDebugLog() { if(debugContent) debugContent.innerHTML = ''; }
+        function copyDebugLog() { if (debugContent) copyTextToClipboard(debugContent.innerText); }
+
+        // --- Business Logic ---
+
+        function toggleAI(checked) {
+            isAIEnabled = checked;
+            if(aiToggle) aiToggle.checked = checked;
+            if(aiToggleSettings) aiToggleSettings.checked = checked;
+            
+            if(isAIEnabled && !apiKey) {
+                showToast("請先設定 API Key", "error");
+                toggleSettings();
+                isAIEnabled = false;
+                if(aiToggle) aiToggle.checked = false;
+                if(aiToggleSettings) aiToggleSettings.checked = false;
+            }
+        }
+
+        function saveSettings() {
+            if(apiKeyInput) {
+                apiKey = apiKeyInput.value.trim();
+                localStorage.setItem('vibe_gemini_api_key', apiKey);
+                showToast("設定已儲存", "success");
+                toggleSettings();
+            }
+        }
+
+        function updateDebugUI() {
+            if(isDebugMode) {
+                if(debugPanel) debugPanel.classList.remove('hidden');
+                if(micContainer) micContainer.style.bottom = '13.5rem'; 
+            } else {
+                if(debugPanel) debugPanel.classList.add('hidden');
+                if(micContainer) micContainer.style.bottom = '1.5rem';
+            }
+        }
+
+        function toggleDebugPanel() {
+            isDebugMode = !isDebugMode;
+            if(debugToggle) debugToggle.checked = isDebugMode;
+            updateDebugUI();
+        }
+
+        function startVisualizer(deviceId = 'default') {
+            if (!navigator.mediaDevices.getUserMedia || !canvas || !canvasCtx) return;
+            
+            // Stop previous stream if any
+            if(stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+
+            // Use selected device for visualizer
+            const constraints = { 
+                audio: deviceId === 'default' ? true : { deviceId: { exact: deviceId } } 
+            };
+
+            navigator.mediaDevices.getUserMedia(constraints)
+                .then(newStream => {
+                    stream = newStream;
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = audioContext.createAnalyser();
+                    microphone = audioContext.createMediaStreamSource(stream);
+                    microphone.connect(analyser);
+                    analyser.fftSize = 256;
+                    const bufferLength = analyser.frequencyBinCount;
+                    const dataArray = new Uint8Array(bufferLength);
+                    canvas.width = 100;
+                    canvas.height = 30;
+
+                    function draw() {
+                        if(!isListening) {
+                            canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+                            return;
+                        }
+                        requestAnimationFrame(draw);
+                        analyser.getByteFrequencyData(dataArray);
+                        canvasCtx.fillStyle = '#f1f5f9';
+                        canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+                        const barWidth = (canvas.width / bufferLength) * 2.5;
+                        let barHeight;
+                        let x = 0;
+                        for(let i = 0; i < bufferLength; i++) {
+                            barHeight = dataArray[i] / 2;
+                            canvasCtx.fillStyle = currentMode === 'meeting' ? '#3b82f6' : '#10b981';
+                            canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+                            x += barWidth + 1;
+                        }
+                    }
+                    draw();
+                })
+                .catch(err => console.log('Visualizer error:', err));
+        }
+
+        function changeMode(mode) {
+            currentMode = mode;
+            logDebug(`Mode changed to: ${mode}`, "sys");
+            
+            if (mode === 'meeting') {
+                if(appLogo) {
+                    appLogo.classList.replace('bg-emerald-500', 'bg-blue-600');
+                    appLogo.classList.replace('shadow-emerald-200', 'shadow-blue-200');
+                }
+                if(modeSelect) modeSelect.classList.replace('text-emerald-600', 'text-blue-600');
+                if(welcomeIcon) welcomeIcon.className = "fa-solid fa-users text-6xl mb-4 opacity-50 transition-opacity";
+                if(welcomeText) welcomeText.innerText = "準備好開會了嗎？";
+                
+                if (isListening && micBtn && micStatus) {
+                    micBtn.classList.replace('bg-emerald-500', 'bg-blue-600');
+                    micStatus.className = micStatus.className.replace('text-emerald-400', 'text-blue-400');
+                }
+            } else {
+                if(appLogo) {
+                    appLogo.classList.replace('bg-blue-600', 'bg-emerald-500');
+                    appLogo.classList.replace('shadow-blue-200', 'shadow-emerald-200');
+                }
+                if(modeSelect) modeSelect.classList.replace('text-blue-600', 'text-emerald-600');
+                if(welcomeIcon) welcomeIcon.className = "fa-solid fa-chalkboard-user text-6xl mb-4 opacity-50 transition-opacity";
+                if(welcomeText) welcomeText.innerText = "準備好上課了嗎？";
+                
+                if (isListening && micBtn && micStatus) {
+                    micBtn.classList.replace('bg-blue-600', 'bg-emerald-500');
+                    micStatus.className = micStatus.className.replace('text-blue-400', 'text-emerald-400');
+                }
+            }
+        }
+
+        function renderPromptList() {
+            const list = document.getElementById('prompt-list');
+            if(!list) return;
+            list.innerHTML = '';
+            allPrompts.forEach(p => {
+                const btn = document.createElement('button');
+                btn.className = `w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors mb-1 ${currentPromptId === p.id ? 'bg-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-100'}`;
+                btn.innerHTML = p.title;
+                btn.onclick = () => selectPrompt(p.id);
+                list.appendChild(btn);
+            });
+        }
+
+        function selectPrompt(id) {
+            currentPromptId = id;
+            renderPromptList();
+            const prompt = allPrompts.find(p => p.id === id);
+            if (prompt) {
+                const t = document.getElementById('prompt-title');
+                const c = document.getElementById('prompt-content');
+                if(t) t.value = prompt.title;
+                if(c) c.value = prompt.content;
+            }
+        }
+
+        function addNewPrompt() {
+            const newId = `custom-${Date.now()}`;
+            const newPrompt = { id: newId, title: '新提示詞', content: '' };
+            customPrompts.push(newPrompt);
+            allPrompts = [...defaultPrompts, ...customPrompts];
+            localStorage.setItem('vibe_prompts', JSON.stringify(customPrompts));
+            selectPrompt(newId);
+        }
+
+        function saveCurrentPrompt() {
+            if (!currentPromptId) return;
+            const title = document.getElementById('prompt-title').value;
+            const content = document.getElementById('prompt-content').value;
+            
+            if (defaultPrompts.some(p => p.id === currentPromptId)) {
+                const newId = `custom-${Date.now()}`;
+                const newPrompt = { id: newId, title: title, content: content };
+                customPrompts.push(newPrompt);
+                localStorage.setItem('vibe_prompts', JSON.stringify(customPrompts));
+                allPrompts = [...defaultPrompts, ...customPrompts];
+                selectPrompt(newId);
+                showToast("已另存為新模板", "success");
+                return;
+            }
+            const idx = customPrompts.findIndex(p => p.id === currentPromptId);
+            if (idx !== -1) {
+                customPrompts[idx].title = title;
+                customPrompts[idx].content = content;
+                localStorage.setItem('vibe_prompts', JSON.stringify(customPrompts));
+                allPrompts = [...defaultPrompts, ...customPrompts];
+                renderPromptList();
+                showToast("儲存成功", "success");
+            }
+        }
+
+        function deleteCurrentPrompt() {
+            if (!currentPromptId) return;
+            if (defaultPrompts.some(p => p.id === currentPromptId)) { showToast("無法刪除預設模板", "error"); return; }
+            if (!confirm("確定要刪除此提示詞嗎？")) return;
+            customPrompts = customPrompts.filter(p => p.id !== currentPromptId);
+            localStorage.setItem('vibe_prompts', JSON.stringify(customPrompts));
+            allPrompts = [...defaultPrompts, ...customPrompts];
+            selectPrompt(allPrompts[0].id);
+        }
+
+        async function generateSummary() {
+            if (!apiKey) { showToast("請先設定 API Key", "error"); return; }
+            if (messageHistory.length === 0) { showToast("沒有內容可總結", "error"); return; }
+
+            const promptText = document.getElementById('prompt-content').value;
+            const fullTranscript = messageHistory.map(m => {
+                let text = m.original;
+                if (m.translation && !m.translation.includes('<div')) {
+                    text += ` (${m.translation})`;
+                }
+                return text;
+            }).join("\n");
+
+            const finalPrompt = `${promptText}\n\n[Transcript Content]:\n${fullTranscript}`;
+            
+            const loading = document.getElementById('summary-loading');
+            const result = document.getElementById('summary-result');
+            const actions = document.getElementById('summary-actions');
+
+            if(loading) loading.classList.remove('hidden');
+            if(result) result.innerHTML = '';
+            if(actions) actions.classList.add('hidden');
+
+            try {
+                const apiURL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                const payload = { contents: [{ parts: [{ text: finalPrompt }] }] };
+                
+                const res = await fetch(apiURL, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await res.json();
+                if (data.candidates && data.candidates[0].content) {
+                    const md = data.candidates[0].content.parts[0].text;
+                    if(result) result.innerHTML = marked.parse(md);
+                    if(actions) actions.classList.remove('hidden');
+                } else {
+                    throw new Error("No summary generated");
+                }
+            } catch (e) {
+                console.error(e);
+                showToast("總結失敗: " + e.message, "error");
+                if(result) result.innerHTML = `<p class="text-red-500">生成失敗，請檢查 API Key 或網路連線。</p>`;
+            } finally {
+                if(loading) loading.classList.add('hidden');
+            }
+        }
+
+        function copySummary() {
+            const result = document.getElementById('summary-result');
+            if(result) copyTextToClipboard(result.innerText);
+        }
+
+        function renderMessageCard(msg) {
+            if(!msgContainer) return;
+            const div = document.createElement('div');
+            div.id = msg.id;
+            div.className = "msg-card bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-slate-100 transition-all hover:shadow-md";
+            
+            let translationBlock = '';
+            if (msg.isAI || msg.translation) {
+                let content = msg.translation || '<span class="inline-block h-4 w-24 rounded shimmer bg-slate-100"></span>';
+                let iconClass = "fa-solid fa-language";
+                let iconBg = "bg-emerald-100 text-emerald-600";
+                
+                if (msg.mode === 'meeting' || (content.includes('🔴') || content.includes('Action'))) {
+                    iconClass = "fa-solid fa-list-check";
+                    iconBg = "bg-blue-100 text-blue-600";
+                }
+
+                translationBlock = `
+                    <div class="mt-3 pt-3 border-t border-slate-100 flex gap-3 items-start">
+                        <div class="mt-1 w-5 h-5 rounded-full ${iconBg} flex items-center justify-center shrink-0 text-xs"><i class="${iconClass}"></i></div>
+                        <div class="flex-1"><div class="translation-content text-slate-700 font-medium text-lg leading-relaxed ${content.includes('<div') ? '' : (msg.mode === 'meeting' ? 'text-blue-900' : 'text-emerald-800')}">${content}</div></div>
+                    </div>`;
+            }
+
+            div.innerHTML = `
+                <div class="flex gap-3 items-start">
+                    <div class="mt-1 w-5 h-5 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center shrink-0 text-xs"><i class="fa-solid fa-quote-left"></i></div>
+                    <div class="flex-1"><p class="original-text text-slate-500 text-base md:text-lg">${msg.original}</p></div>
+                    <button onclick="copyCard('${msg.id}')" class="text-slate-300 hover:text-emerald-500 transition-colors"><i class="fa-regular fa-copy"></i></button>
+                </div>
+                ${translationBlock}
+            `;
+            msgContainer.appendChild(div);
+        }
+
+        function createMessageCard(text, isFinal) {
+            if(welcomeScreen) welcomeScreen.style.display = 'none';
+            const id = `msg-${Date.now()}`;
+            const newMsg = { 
+                id, original: text, translation: '', isAI: isAIEnabled, timestamp: Date.now(), mode: currentMode 
+            };
+            messageHistory.push(newMsg);
+            saveToLocalStorage();
+            renderMessageCard(newMsg);
+            scrollToBottom();
+            if (isAIEnabled) translateMessage(id, text);
+        }
+
+        async function translateMessage(id, text) {
+            if (!apiKey) return;
+            try {
+                const lastMsg = messageHistory.length >= 2 ? messageHistory[messageHistory.length - 2] : null;
+                const context = lastMsg ? (lastMsg.original + " " + (lastMsg.translation || "")) : "None";
+                logDebug(`AI Request (${currentMode})`, "sys");
+                const result = await callGeminiAPI(text, context);
+                updateTranslation(id, result);
+                logDebug("AI Response Received", "ai");
+            } catch (error) {
+                console.error(error);
+                logDebug(`AI Error: ${error.message}`, "error");
+                const errorHtml = `<div class="flex items-center gap-2 text-amber-500 text-sm font-bold bg-amber-50 px-3 py-2 rounded-lg w-fit"><i class="fa-solid fa-triangle-exclamation"></i><span>翻譯未完成</span><button onclick="retryTranslation('${id}')" class="ml-auto bg-white border border-amber-200 text-amber-600 hover:text-amber-800 px-2 py-0.5 rounded text-xs transition-colors shadow-sm">重試</button></div>`;
+                updateTranslation(id, errorHtml);
+            }
+        }
+
+        function retryTranslation(id) {
+            const card = document.getElementById(id);
+            if(!card) return;
+            const text = card.querySelector('.original-text').innerText;
+            const transDiv = card.querySelector('.translation-content');
+            if(transDiv) transDiv.innerHTML = '<span class="inline-block h-4 w-24 rounded shimmer bg-slate-100"></span>';
+            translateMessage(id, text);
+        }
+
+        function updateTranslation(id, content) {
+            const card = document.getElementById(id);
+            if (!card) return;
+            const contentDiv = card.querySelector('.translation-content');
+            if (contentDiv) {
+                contentDiv.innerHTML = content;
+                if (!content.includes('<div')) {
+                    if (currentMode === 'meeting') {
+                        contentDiv.classList.remove('text-emerald-800');
+                        contentDiv.classList.add('text-blue-900');
+                    } else {
+                        contentDiv.classList.remove('text-blue-900');
+                        contentDiv.classList.add('text-emerald-800');
+                    }
+                }
+            }
+            const msg = messageHistory.find(m => m.id === id);
+            if(msg && !content.includes('<div')) {
+                msg.translation = content;
+                saveToLocalStorage();
+            }
+        }
+
+        async function callGeminiAPI(text, context) {
+            const apiURL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+            let prompt = "";
+            
+            if (currentMode === 'lecture') {
+                if (currentLang === 'en-US') {
+                    prompt = `Role: Expert Academic Interpreter. Context: "${context}" Input (Noisy ASR): "${text}" Task: 1. Fix phonetic errors based on context. 2. Translate to Fluent Traditional Chinese (Taiwan). Output: "Original (Fixed): [Fixed English]<br><br>[Chinese Translation]"`;
+                } else {
+                    prompt = `Role: Expert Interpreter. Context: "${context}" Input: "${text}" Task: Fix errors, Translate to English. Output: "Original (Fixed): [Fixed Chinese]<br><br>[English Translation]"`;
+                }
+            } else {
+                prompt = `Role: Professional Meeting Minute Taker. Context: "${context}" Input (Raw Mixed Audio Transcript): "${text}" Task: 1. Code-Switching Repair. 2. Identify Intent. 3. Mark Action Items with 🔴. 4. Output in Traditional Chinese (Taiwan). Output Format: "[Intent/Speaker Guess]: [Polished Content] <br> [🔴 Action Item if any]"`;
+            }
+
+            const payload = { 
+                contents: [{ parts: [{ text: prompt }] }],
+                safetySettings: [
+                    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                ]
+            };
+
+            const maxRetries = 3; 
+            for(let i=0; i <= maxRetries; i++) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 15000);
+                    const res = await fetch(apiURL, {
+                        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload), signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+                    if (res.status === 503) throw new Error("503");
+                    if (!res.ok) throw new Error(`API Error: ${res.status}`);
+                    const data = await res.json();
+                    if (data.candidates && data.candidates[0].content && data.candidates[0].content.parts.length > 0) return data.candidates[0].content.parts[0].text.trim();
+                    throw new Error("No Content");
+                } catch(e) {
+                    if(i === maxRetries) throw e; 
+                    await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+                }
+            }
+        }
+
+        function exportHistory() {
+            if (messageHistory.length === 0) { showToast("無內容", "error"); return; }
+            let mdContent = "# Vibe Note\n\n";
+            messageHistory.forEach((msg, i) => {
+                mdContent += `### ${i + 1}. ${msg.original}\n> ${msg.translation || ''}\n\n`;
+            });
+            const url = URL.createObjectURL(new Blob([mdContent], { type: 'text/markdown' }));
+            const a = document.createElement('a'); a.href = url; a.download = `Vibe_${Date.now()}.md`;
+            a.click(); URL.revokeObjectURL(url);
+            showToast("已匯出", "success");
+        }
+
+        function copyCard(id) { 
+            const el = document.getElementById(id);
+            if(el) copyTextToClipboard(el.innerText);
+        }
+
+        function clearAll() { if (messageHistory.length > 0) toggleClearModal(); }
+        function performClear() { 
+            if(msgContainer) msgContainer.innerHTML = ''; 
+            // Safe check for welcomeScreen again in clear function
+            const ws = document.getElementById('welcome-screen');
+            if(ws) ws.style.display = 'flex'; 
+            messageHistory = []; 
+            localStorage.removeItem('vibe_history'); 
+            toggleClearModal(); 
+            showToast("已清空", "success"); 
+            logDebug("History Cleared", "sys"); 
+        }
+
+        function scrollToBottom() { if(msgContainer) msgContainer.scrollTop = msgContainer.scrollHeight; }
+
+        function setLanguage(lang) {
+            currentLang = lang;
+            const btnEn = document.getElementById('lang-en');
+            const btnZh = document.getElementById('lang-zh');
+            const activeClass = "bg-white text-emerald-700 shadow-sm border border-slate-200";
+            const inactiveClass = "text-slate-500 hover:text-slate-700 border border-transparent";
+            
+            if(lang === 'en-US') {
+                if(btnEn) btnEn.className = `px-4 py-1 rounded-full text-xs font-bold transition-all ${activeClass}`;
+                if(btnZh) btnZh.className = `px-4 py-1 rounded-full text-xs font-bold transition-all ${inactiveClass}`;
+            } else {
+                if(btnZh) btnZh.className = `px-4 py-1 rounded-full text-xs font-bold transition-all ${activeClass}`;
+                if(btnEn) btnEn.className = `px-4 py-1 rounded-full text-xs font-bold transition-all ${inactiveClass}`;
+            }
+
+            if(isListening) {
+                logDebug(`Switching Lang to ${lang}`, "sys");
+                ignoreEnd = true; recognition.stop();
+                setTimeout(() => { ignoreEnd = false; recognition.lang = lang; recognition.start(); }, 300);
+            }
+        }
+
+        function updateMicState(on) {
+            const micBtn = document.getElementById('mic-btn');
+            if(!micBtn) return;
+            const icon = micBtn.querySelector('i');
+            // Safe grab inside function
+            const micStatus = document.getElementById('mic-status');
+            const interimBar = document.getElementById('interim-bar');
+            const recDot = document.getElementById('recording-dot');
+
+            const activeColor = currentMode === 'meeting' ? 'bg-blue-600' : 'bg-emerald-500';
+            const activeText = currentMode === 'meeting' ? 'text-blue-400' : 'text-emerald-400';
+
+            if (on) {
+                micBtn.classList.remove('bg-slate-800');
+                micBtn.classList.add(activeColor);
+                micBtn.classList.add('mic-active');
+                if(recDot) recDot.classList.remove('hidden');
+                if(icon) icon.classList.replace('fa-microphone', 'fa-pause');
+                if(interimBar) interimBar.classList.remove('opacity-0', 'translate-y-4');
+                if(micStatus) {
+                    micStatus.textContent = "Listening...";
+                    micStatus.className = `text-xs font-mono tracking-wider uppercase shrink-0 ${activeText} animate-pulse`;
+                }
+            } else {
+                micBtn.classList.add('bg-slate-800');
+                micBtn.classList.remove('bg-emerald-500', 'bg-blue-600');
+                micBtn.classList.remove('mic-active');
+                if(recDot) recDot.classList.add('hidden');
+                if(icon) icon.classList.replace('fa-pause', 'fa-microphone');
+                if(interimBar) interimBar.classList.add('opacity-0', 'translate-y-4');
+            }
+        }
+
+        function toggleRecognition() {
+            if (!recognition) initRecognition();
+            try {
+                if (isListening) { 
+                    isListening = false; 
+                    ignoreEnd = true; 
+                    recognition.stop(); 
+                } else { 
+                    recognition.lang = currentLang; 
+                    recognition.start(); 
+                }
+            } catch (e) {
+                console.error("Toggle recognition error", e);
+                logDebug("Toggle Error: " + e.message, "error");
+                isListening = false;
+                updateMicState(false);
+            }
+        }
+
+        function initRecognition() {
+            if (!('webkitSpeechRecognition' in window)) { showToast("請使用 Chrome", "error"); return; }
+            recognition = new webkitSpeechRecognition();
+            
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = currentLang;
+            recognition.maxAlternatives = 3; 
+
+            recognition.onstart = () => {
+                isListening = true; ignoreEnd = false; updateMicState(true);
+                logDebug("Recognition Started", "sys");
+                
+                lastResultTime = Date.now();
+                pendingInterim = '';
+                lastInterimLength = 0;
+                
+                if ('wakeLock' in navigator) navigator.wakeLock.request('screen').catch(()=>{});
+                startVisualizer(selectedDeviceId);
+
+                clearInterval(silenceInterval);
+                silenceInterval = setInterval(() => {
+                    if (isListening && (Date.now() - lastResultTime > SILENCE_TIMEOUT)) {
+                        logDebug("Long silence detected", "sys");
+                        const ms = document.getElementById('mic-status');
+                        if(ms) {
+                            ms.textContent = "Check Mic!";
+                            ms.className = "text-xs font-mono tracking-wider uppercase shrink-0 text-amber-500 font-bold blink";
+                        }
+                    }
+                }, 5000);
+            };
+
+            recognition.onend = () => {
+                clearInterval(silenceInterval);
+                
+                if (pendingInterim && pendingInterim.trim().length > 5) {
+                    logDebug(`Committing on end: "${pendingInterim}"`, "sys");
+                    createMessageCard(pendingInterim.trim(), true);
+                    pendingInterim = '';
+                    // Safe check for interimText
+                    const iText = document.getElementById('interim-text');
+                    if(iText) iText.innerText = '...';
+                }
+
+                if (isListening && !ignoreEnd) {
+                    logDebug("Auto-restarting...", "sys");
+                    setTimeout(() => recognition.start(), 100);
+                } else {
+                    isListening = false; updateMicState(false);
+                    logDebug("Recognition Stopped", "sys");
+                    // Direct access for safety
+                    const ms = document.getElementById('mic-status');
+                    if(ms) {
+                        ms.textContent = "Stopped";
+                        ms.className = "text-[10px] text-slate-400 font-mono tracking-wider uppercase shrink-0";
+                    }
+                }
+            };
+
+            recognition.onresult = (event) => {
+                lastResultTime = Date.now();
+                let interim = '';
+                let final = '';
+
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    const result = event.results[i];
+                    if (result.isFinal) {
+                        let bestTranscript = result[0].transcript;
+                        let bestConfidence = result[0].confidence;
+                        for (let j = 1; j < Math.min(result.length, 3); j++) {
+                            if (result[j] && result[j].confidence > bestConfidence) {
+                                bestTranscript = result[j].transcript;
+                                bestConfidence = result[j].confidence;
+                            }
+                        }
+                        final += bestTranscript;
+                        logDebug(`Final (conf: ${bestConfidence.toFixed(2)}): "${bestTranscript}"`, "final");
+                    } else {
+                        interim += result[0].transcript;
+                    }
+                }
+
+                // Direct access for safety
+                const iText = document.getElementById('interim-text');
+                const mStatus = document.getElementById('mic-status');
+
+                if (final.trim()) {
+                    const cleanFinal = final.trim();
+                    const isDup = lastFinalText && (cleanFinal === lastFinalText || cleanFinal.includes(lastFinalText) || lastFinalText.includes(cleanFinal));
+                    
+                    if (!isDup || (Date.now() - (messageHistory[messageHistory.length-1]?.timestamp || 0) > 3000)) {
+                        createMessageCard(cleanFinal, true);
+                        lastFinalText = cleanFinal;
+                    } else {
+                        logDebug("Ignored duplicate final", "sys");
+                    }
+                    pendingInterim = '';
+                    if(iText) iText.innerText = '...';
+                    if(mStatus) mStatus.textContent = "Listening...";
+                }
+
+                if (interim.trim()) {
+                    const cleanInterim = interim.trim();
+                    
+                    if (cleanInterim.length > lastInterimLength * 0.3) { 
+                        pendingInterim = cleanInterim;
+                        if(iText) iText.innerText = cleanInterim;
+                        if(mStatus) mStatus.textContent = "Transcribing...";
+                        logDebug(`Interim: "${cleanInterim}"`, "raw");
+                        lastInterimLength = cleanInterim.length;
+                        
+                        if (cleanInterim.length > 200) {
+                            logDebug("Force commit (Length > 200) & STOP", "sys");
+                            createMessageCard(cleanInterim, true);
+                            
+                            lastFinalText = cleanInterim; 
+                            pendingInterim = ''; 
+                            recognition.stop(); 
+                            return; 
+                        }
+                    }
+                }
+            };
+
+            recognition.onerror = (e) => {
+                logDebug(`Error: ${e.error}`, "error");
+                if(e.error === 'not-allowed') {
+                    showToast("權限被拒", "error"); ignoreEnd = true; isListening = false; updateMicState(false);
+                } else if(e.error === 'network') {
+                    logDebug("Network error - check connection", "error");
+                } else if(e.error === 'no-speech') {
+                     logDebug("No speech detected, continuing...", "sys");
+                }
+            };
+        }
+    </script>
+</body>
+</html>
