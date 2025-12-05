@@ -468,6 +468,11 @@
         const MAX_RESTART_ATTEMPTS = 5;
         let audioTestInterval = null;
         
+        // Audio test constants
+        const AUDIO_TEST_DURATION = 20;         // Number of test iterations (500ms each = 10 seconds)
+        const AUDIO_SIGNAL_THRESHOLD = 5;        // Minimum average signal level to detect audio
+        const NO_SIGNAL_WARNING_COUNT = 10;      // Iterations without signal before warning (5 seconds)
+        
         // --- Prompts ---
         let customPrompts = JSON.parse(localStorage.getItem('vibe_prompts') || '[]');
         const defaultPrompts = [
@@ -676,7 +681,6 @@
                     
                     let signalDetected = false;
                     let testCount = 0;
-                    const maxTests = 20; // 10 seconds (500ms intervals)
                     let noSignalCount = 0;
                     
                     audioTestInterval = setInterval(() => {
@@ -686,7 +690,7 @@
                         // Calculate average signal level
                         const average = dataArray.reduce((a, b) => a + b, 0) / bufferLength;
                         
-                        if (average > 5) {
+                        if (average > AUDIO_SIGNAL_THRESHOLD) {
                             signalDetected = true;
                             noSignalCount = 0;
                             
@@ -701,8 +705,8 @@
                         } else {
                             noSignalCount++;
                             
-                            // Warn after 5 seconds of no signal
-                            if (noSignalCount >= 10) {
+                            // Warn after reaching no signal warning threshold
+                            if (noSignalCount >= NO_SIGNAL_WARNING_COUNT) {
                                 if (statusIndicator) {
                                     statusIndicator.className = 'audio-status-indicator audio-status-error blink';
                                 }
@@ -713,8 +717,8 @@
                             }
                         }
                         
-                        // End test after 10 seconds
-                        if (testCount >= maxTests) {
+                        // End test after reaching max test duration
+                        if (testCount >= AUDIO_TEST_DURATION) {
                             clearInterval(audioTestInterval);
                             audioTestInterval = null;
                             
